@@ -8,36 +8,62 @@ Long-term memory for your OpenClaw agents. Zero LLM on write. Zero config.
 openclaw plugins install @unforget-ai/openclaw
 ```
 
-## Setup
+Requires Python 3.12 with `unforget-embed`:
 
-Add to your OpenClaw plugin config:
-
-```json
-{
-  "unforget-memory": {}
-}
+```bash
+pipx install unforget-embed --python python3.12
 ```
 
 That's it. No API keys. No Docker. No database setup.
 
-On first use, the plugin auto-starts an embedded PostgreSQL + Unforget server via `unforget-embed`.
-
 ## How It Works
 
 - **Auto-Recall**: Before each prompt, relevant memories are retrieved and injected into context
-- **Auto-Retain**: After each response, important conversation turns are stored as memories
+- **Auto-Retain**: After each response, conversation turns are stored as memories
+- **Forget/Remember**: Say "forget that I like pizza" or "remember my name is Kobi" — handled automatically
 - **4-Channel Retrieval**: Semantic + BM25 + entity + temporal search, fused with RRF
+
+## Usage
+
+Just chat normally. The plugin handles everything:
+
+```
+You: My name is Kobi and I like sushi
+Agent: Got it — I'll remember that, Kobi.
+
+/new (new session)
+
+You: What's my name and what food do I like?
+Agent: Your name is Kobi and you like sushi.
+
+You: Forget that I like sushi
+Agent: Forgotten.
+
+/new
+
+You: What food do I like?
+Agent: You haven't told me any food preferences.
+```
 
 ## Configuration
 
+The plugin works with zero config. Optional settings in `openclaw.json`:
+
 ```json
 {
-  "unforget-memory": {
-    "autoRetain": true,
-    "autoRecall": true,
-    "autoRecallTopK": 10,
-    "orgId": "my-org",
-    "agentId": "my-agent"
+  "plugins": {
+    "entries": {
+      "@unforget-ai/openclaw": {
+        "enabled": true,
+        "config": {
+          "orgId": "openclaw",
+          "autoRetain": true,
+          "autoRecall": true,
+          "autoRecallTopK": 10,
+          "debug": false
+        }
+      }
+    }
   }
 }
 ```
@@ -48,22 +74,25 @@ If you already run Unforget or want to use your own PostgreSQL:
 
 ```json
 {
-  "unforget-memory": {
+  "config": {
     "apiUrl": "http://localhost:9077"
   }
 }
 ```
 
-## Requirements
+## Architecture
 
-For embedded mode (default):
-- Python 3.11+ with `pip install unforget-embed`
-- Or `uvx` (Python package runner)
-
-The plugin tries these in order:
-1. `uvx unforget-embed` (auto-installs from PyPI)
-2. `unforget-embed` (if pip-installed)
-3. `python -m unforget_embed.cli` (fallback)
+```
+OpenClaw agent
+    │ hooks: before_agent_start, agent_end
+    ▼
+@unforget-ai/openclaw plugin (TypeScript)
+    │ HTTP to localhost:9077
+    ▼
+unforget-embed (auto-started Python daemon)
+    ├── unforget core library (4-channel retrieval)
+    └── pgserver (embedded PostgreSQL + pgvector)
+```
 
 ## License
 
