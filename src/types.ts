@@ -8,7 +8,21 @@ export interface OpenClawPluginApi {
   resolvePath(path: string): string;
   registerCli(cli: unknown): void;
   on(event: string, handler: (event: HookEvent, ctx: HookContext) => Promise<unknown> | unknown): void;
-  registerHook(hook: string, handler: (event: HookEvent) => Promise<void> | void): void;
+  registerHook(hook: string, handler: (event: HookEvent) => Promise<unknown> | unknown): void;
+  registerTool(factory: (ctx: any) => ToolDefinition, opts?: { name: string }): void;
+}
+
+export interface ToolDefinition {
+  name: string;
+  label: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  execute(toolCallId: string, params: Record<string, unknown>): Promise<ToolResult>;
+}
+
+export interface ToolResult {
+  content: Array<{ type: string; text: string }>;
+  details?: Record<string, unknown>;
 }
 
 export interface Logger {

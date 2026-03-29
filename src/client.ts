@@ -105,6 +105,31 @@ export class UnforgetClient {
     return res.json();
   }
 
+  async search(
+    query: string,
+    orgId: string,
+    agentId: string,
+    limit = 5
+  ): Promise<MemoryItem[]> {
+    const res = await fetch(`${this.baseUrl}/v1/memory/recall`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        org_id: orgId,
+        agent_id: agentId,
+        limit,
+      }),
+      signal: AbortSignal.timeout(this.timeout),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Search failed: ${res.status} ${await res.text()}`);
+    }
+
+    return res.json();
+  }
+
   async forget(memoryId: string): Promise<void> {
     const res = await fetch(`${this.baseUrl}/v1/memory/${memoryId}`, {
       method: "DELETE",

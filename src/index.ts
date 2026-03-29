@@ -6,12 +6,11 @@
  */
 
 import type {
-  OpenClawPluginApi,
   PluginConfig,
   HookEvent,
   HookContext,
-  Logger,
 } from "./types.js";
+import { Type } from "@sinclair/typebox";
 import { UnforgetClient } from "./client.js";
 import { UnforgetDaemon } from "./daemon.js";
 
@@ -19,7 +18,7 @@ import { UnforgetDaemon } from "./daemon.js";
 let client: UnforgetClient | null = null;
 let daemon: UnforgetDaemon | null = null;
 let config: PluginConfig = {};
-let logger: Logger = console;
+let logger: any = console;
 let isInitialized = false;
 let initPromise: Promise<void> | null = null;
 
@@ -149,7 +148,7 @@ async function ensureReady(): Promise<void> {
 /**
  * Plugin entry point — called by OpenClaw when the plugin is loaded.
  */
-export default function init(api: OpenClawPluginApi): void {
+export default function init(api: any): void {
   // Prevent double registration
   if (registeredApis.has(api)) return;
   registeredApis.add(api);
@@ -161,8 +160,7 @@ export default function init(api: OpenClawPluginApi): void {
     logger.info("[Unforget] Plugin loaded with config:", JSON.stringify(config));
   }
 
-  // ── Auto-Recall: inject memories via before_agent_start ──
-  // Must return { prependContext: "..." } — OpenClaw prepends this to the system context.
+  // ── Auto-Recall + Intent Detection via before_agent_start ──
   api.on("before_agent_start", async (event: HookEvent, ctx: HookContext) => {
     if (!config.autoRecall) return;
 
@@ -175,6 +173,56 @@ export default function init(api: OpenClawPluginApi): void {
       if (!userMessage || userMessage.length < MIN_RECALL_LENGTH) return;
 
       const agentId = getAgentId(ctx);
+
+      // Detect "forget" intent and handle it directly
+      const forgetMatch = userMessage.match(
+        /(?:forget|remove|delete|erase)\s+(?:that\s+)?(?:(?:i|my)\s+)?(?:(?:like|love|prefer|am|is|name|want)\s+)?(.+)/i
+      );
+      if (forgetMatch) {
+        const searchQuery = forgetMatch[1].trim().replace(/[.!?]+$/, "");
+        if (config.debug) {
+          logger.info(`[Unforget] Forget intent detected: "${searchQuery}"`);
+        }
+
+        const results = await client.search(searchQuery, config.orgId!, agentId, 5);
+        let deleted = 0;
+        for (const m of results) {
+          try {
+            await client.forget((m as any).id);
+            deleted++;
+            if (config.debug) {
+              logger.info(`[Unforget] Deleted memory: ${(m as any).id} — "${(m as any).content?.slice(0, 60)}"`);
+            }
+          } catch { /* skip */ }
+        }
+
+        if (deleted > 0) {
+          return {
+            prependContext: `<memory-action>\nDeleted ${deleted} memories matching "${searchQuery}". Confirm to the user that you've forgotten this.\n</memory-action>`,
+          };
+        }
+      }
+
+      // Detect "remember" intent and handle it directly
+      const rememberMatch = userMessage.match(
+        /(?:remember|save|store|note)\s+(?:that\s+)?(.+)/i
+      );
+      if (rememberMatch) {
+        const fact = rememberMatch[1].trim().replace(/[.!?]+$/, "");
+        if (fact.length > 5) {
+          try {
+            await client.write(fact, config.orgId!, agentId, { importance: 0.8 });
+            if (config.debug) {
+              logger.info(`[Unforget] Stored explicit memory: "${fact.slice(0, 60)}"`);
+            }
+            return {
+              prependContext: `<memory-action>\nStored to memory: "${fact}". Confirm to the user.\n</memory-action>`,
+            };
+          } catch { /* fall through to normal recall */ }
+        }
+      }
+
+      // Normal recall
       const result = await client.autoRecall(
         userMessage,
         config.orgId!,
@@ -185,8 +233,6 @@ export default function init(api: OpenClawPluginApi): void {
       if (result.memory_count > 0) {
         const memoryBlock = [
           "<relevant-memories>",
-          "Facts and context from previous conversations with this user. Use these to answer questions.",
-          "",
           result.context,
           "</relevant-memories>",
         ].join("\n");
@@ -279,26 +325,139 @@ export default function init(api: OpenClawPluginApi): void {
     }
   });
 
-  // ── Memory tools: let the agent store/search/forget ──
+  // ── Memory tool instructions via bootstrap ──
   try {
-    api.registerHook("agent:bootstrap", async (event: HookEvent) => {
-      // Inject memory tool instructions into the agent's system prompt
-      const toolInstructions = [
-        "",
-        "## Memory Tools",
-        "You have access to long-term memory via the Unforget memory system.",
-        "Important facts, preferences, and context from past conversations are automatically recalled.",
-        "When the user shares important information (preferences, facts about themselves, decisions),",
-        "it will be automatically remembered for future conversations.",
-        "",
-      ].join("\n");
-
-      if (event.prompt && typeof event.prompt === "string") {
-        event.prompt += toolInstructions;
-      }
+    api.registerHook("agent:bootstrap", async () => {
+      return {
+        prependContext: [
+          "## Long-Term Memory",
+          "You have 3 memory tools: memory_store, memory_recall, memory_forget.",
+          "- When the user asks you to REMEMBER something → use memory_store",
+          "- When the user asks you to FORGET something → use memory_recall to find the ID, then memory_forget to delete it",
+          "- When you need to look up past information → use memory_recall",
+          "- Do NOT use markdown files for memory. Use only the memory tools.",
+          "- Do NOT just acknowledge forget/remember requests — always call the tool.",
+          "",
+        ].join("\n"),
+      };
     });
   } catch {
-    // Hook registration not available — skip
+    // Bootstrap not available
+  }
+
+  // ── Memory tools: let the agent store/search/forget ──
+  try {
+    api.registerTool(
+      (toolCtx: any) => {
+        const agentId = getAgentId(toolCtx);
+        return {
+          name: "memory_recall",
+          label: "Memory Recall",
+          description: "Search long-term memories. Returns memory IDs and content. Use when you need context or before deleting a memory.",
+          parameters: Type.Object({
+            query: Type.String({ description: "Search query for finding relevant memories" }),
+            limit: Type.Optional(Type.Number({ description: "Max results to return (default: 5)" })),
+          }),
+          async execute(_toolCallId: string, params: Record<string, unknown>) {
+            await ensureReady();
+            if (!client) return { content: [{ type: "text", text: "Memory not available" }] };
+            const results = await client.search(
+              params.query as string, config.orgId!, agentId, (params.limit as number) || 5
+            );
+            const formatted = results.map((m: any, i: number) =>
+              `${i + 1}. [ID: ${m.id}] ${m.content}`
+            ).join("\n");
+            return {
+              content: [{ type: "text", text: formatted || "No memories found." }],
+              details: { count: results.length },
+            };
+          },
+        };
+      },
+      { name: "memory_recall" }
+    );
+
+    api.registerTool(
+      (toolCtx: any) => {
+        const agentId = getAgentId(toolCtx);
+        return {
+          name: "memory_store",
+          label: "Memory Store",
+          description: "Save important information to long-term memory. Use for user preferences, facts, and decisions worth remembering.",
+          parameters: Type.Object({
+            text: Type.String({ description: "The fact or information to remember" }),
+            importance: Type.Optional(Type.Number({ description: "Importance score 0-1 (default: 0.7)" })),
+          }),
+          async execute(_toolCallId: string, params: Record<string, unknown>) {
+            await ensureReady();
+            if (!client) return { content: [{ type: "text", text: "Memory not available" }] };
+            const result = await client.write(
+              params.text as string, config.orgId!, agentId,
+              { importance: (params.importance as number) || 0.7 }
+            );
+            return {
+              content: [{ type: "text", text: `Remembered: "${(params.text as string).slice(0, 80)}"` }],
+              details: { id: (result as any)?.id },
+            };
+          },
+        };
+      },
+      { name: "memory_store" }
+    );
+
+    api.registerTool(
+      (toolCtx: any) => ({
+        name: "memory_forget",
+        label: "Memory Forget",
+        description: "Delete a specific memory by its ID. Use memory_recall first to find the ID, then call this to delete it.",
+        parameters: Type.Object({
+          query: Type.Optional(Type.String({ description: "Search query to find memory to delete" })),
+          memoryId: Type.Optional(Type.String({ description: "Specific memory ID (UUID) to delete" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          await ensureReady();
+          if (!client) return { content: [{ type: "text", text: "Memory not available" }] };
+          const agentId = getAgentId(toolCtx);
+
+          // If query provided, search first then delete matches
+          if (params.query && !params.memoryId) {
+            const results = await client.search(
+              params.query as string, config.orgId!, agentId, 3
+            );
+            if (results.length === 0) {
+              return { content: [{ type: "text", text: "No matching memories found to delete." }] };
+            }
+            const deleted: string[] = [];
+            for (const m of results) {
+              try {
+                await client.forget((m as any).id);
+                deleted.push((m as any).content?.slice(0, 60));
+              } catch { /* skip */ }
+            }
+            return {
+              content: [{ type: "text", text: `Deleted ${deleted.length} memories:\n${deleted.map(d => `- ${d}`).join("\n")}` }],
+            };
+          }
+
+          // Direct ID delete
+          if (params.memoryId) {
+            try {
+              await client.forget(params.memoryId as string);
+              return { content: [{ type: "text", text: `Deleted memory ${params.memoryId}` }] };
+            } catch (err) {
+              return { content: [{ type: "text", text: `Failed to delete: ${err}` }] };
+            }
+          }
+
+          return { content: [{ type: "text", text: "Provide either a query or memoryId to delete." }] };
+        },
+      }),
+      { name: "memory_forget" }
+    );
+
+    logger.info("[Unforget] Registered 3 memory tools: memory_recall, memory_store, memory_forget");
+  } catch (err) {
+    logger.warn("[Unforget] Tool registration not available:", err);
   }
 
   // ── Cleanup on exit ──
