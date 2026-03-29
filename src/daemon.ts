@@ -60,13 +60,6 @@ export class UnforgetDaemon {
         this.process = spawn(cmd, [...args], {
           stdio: "pipe",
           detached: false,
-          env: {
-            ...process.env,
-            // Force CPU on macOS to avoid MPS issues in daemon mode
-            ...(process.platform === "darwin"
-              ? { PYTORCH_ENABLE_MPS_FALLBACK: "1" }
-              : {}),
-          },
         });
 
         this.process.stdout?.on("data", (data: Buffer) => {

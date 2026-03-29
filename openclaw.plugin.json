@@ -1,5 +1,5 @@
 {
-  "id": "unforget-memory",
+  "id": "@unforget-ai/openclaw",
   "name": "Unforget Memory",
   "description": "Long-term memory for AI agents — zero LLM on write, 4-channel hybrid retrieval, PostgreSQL-native",
   "version": "0.1.0",

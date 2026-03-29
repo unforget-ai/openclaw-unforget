@@ -57,6 +57,47 @@ function isNoise(content: string): boolean {
   return content.length < 10 || NOISE_PATTERNS.some((p) => p.test(content.trim()));
 }
 
+function cleanContent(text: string): string {
+  // Strip OpenClaw metadata prefix from user messages
+  const metaMatch = text.match(/^Sender \(untrusted metadata\):[\s\S]*?```\s*\n([\s\S]*)$/);
+  if (metaMatch) {
+    return metaMatch[1].trim();
+  }
+  // Strip JSON metadata blocks at the start
+  const jsonBlockMatch = text.match(/^```json[\s\S]*?```\s*\n([\s\S]*)$/);
+  if (jsonBlockMatch) {
+    return jsonBlockMatch[1].trim();
+  }
+  return text;
+}
+
+function extractText(content: unknown): string {
+  if (typeof content === "string") return content;
+
+  // Array of content blocks: [{ type: "text", text: "..." }, ...]
+  if (Array.isArray(content)) {
+    return content
+      .map((block: any) => {
+        if (typeof block === "string") return block;
+        if (block?.type === "text" && typeof block.text === "string") return block.text;
+        if (typeof block?.content === "string") return block.content;
+        if (typeof block?.text === "string") return block.text;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  // Single object with text/content field
+  if (content && typeof content === "object") {
+    const obj = content as Record<string, unknown>;
+    if (typeof obj.text === "string") return obj.text;
+    if (typeof obj.content === "string") return obj.content;
+  }
+
+  return "";
+}
+
 function extractLastUserMessage(event: HookEvent): string | null {
   if (event.prompt && typeof event.prompt === "string") {
     return event.prompt;
@@ -65,7 +106,7 @@ function extractLastUserMessage(event: HookEvent): string | null {
   if (event.messages && Array.isArray(event.messages)) {
     for (let i = event.messages.length - 1; i >= 0; i--) {
       if (event.messages[i].role === "user") {
-        return event.messages[i].content;
+        return extractText(event.messages[i].content);
       }
     }
   }
@@ -170,27 +211,65 @@ export default function init(api: OpenClawPluginApi): void {
 
       const agentId = getAgentId(ctx);
       const messages = event.messages;
-      if (!messages || !Array.isArray(messages)) return;
 
-      // Store user and assistant messages from this turn
-      for (const msg of messages.slice(-2)) {
-        if (msg.role === "system") continue;
-        if (isNoise(msg.content)) continue;
-
-        await client.write(
-          msg.content,
-          config.orgId!,
-          agentId,
-          {
-            memoryType: "event",
-            tags: [msg.role],
-            importance: msg.role === "user" ? 0.6 : 0.4,
-          }
+      if (config.debug) {
+        logger.info(
+          `[Unforget] agent_end: agentId=${agentId}, messages=${messages?.length ?? "none"}, orgId=${config.orgId}`
         );
       }
 
+      if (!messages || !Array.isArray(messages)) {
+        if (config.debug) logger.info("[Unforget] No messages in agent_end event");
+        return;
+      }
+
+      // Store user and assistant messages from this turn
+      let stored = 0;
+      const lastTwo = messages.slice(-2);
+      for (const msg of lastTwo) {
+        // Extract text from message content (may be string, array of blocks, or object)
+        const text = extractText(msg.content);
+
+        if (config.debug) {
+          logger.info(
+            `[Unforget] Checking msg: role=${msg.role}, type=${typeof msg.content}, isArray=${Array.isArray(msg.content)}, text="${text.slice(0, 80)}"`
+          );
+        }
+        if (msg.role === "system") continue;
+        if (!text) continue;
+        // Clean metadata prefix and skip session control messages
+        const cleaned = cleanContent(text);
+        if (!cleaned) continue;
+        if (cleaned.startsWith("A new session was started")) continue;
+        if (isNoise(cleaned)) {
+          if (config.debug) logger.info(`[Unforget] Skipped noise: "${text.slice(0, 50)}"`);
+          continue;
+        }
+
+        try {
+          const result = await client.write(
+            cleaned,
+            config.orgId!,
+            agentId,
+            {
+              memoryType: "event",
+              tags: [msg.role],
+              importance: msg.role === "user" ? 0.6 : 0.4,
+            }
+          );
+          stored++;
+          if (config.debug) {
+            logger.info(
+              `[Unforget] Wrote memory: ${(result as any)?.id ?? "ok"} — "${msg.content.slice(0, 50)}..."`
+            );
+          }
+        } catch (writeErr) {
+          logger.warn(`[Unforget] Write failed for ${msg.role}: ${writeErr}`);
+        }
+      }
+
       if (config.debug) {
-        logger.info("[Unforget] Stored conversation turn");
+        logger.info(`[Unforget] Stored ${stored} memories from conversation turn`);
       }
     } catch (err) {
       logger.warn("[Unforget] Auto-retain failed:", err);
