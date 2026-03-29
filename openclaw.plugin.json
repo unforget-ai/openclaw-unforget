@@ -1,0 +1,84 @@
+{
+  "id": "unforget-memory",
+  "name": "Unforget Memory",
+  "description": "Long-term memory for AI agents — zero LLM on write, 4-channel hybrid retrieval, PostgreSQL-native",
+  "version": "0.1.0",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "databaseUrl": {
+        "type": "string",
+        "description": "PostgreSQL connection URL. Leave empty for auto-embedded PostgreSQL via unforget-embed."
+      },
+      "apiUrl": {
+        "type": "string",
+        "description": "URL of a running Unforget API server. Leave empty to auto-start unforget-embed."
+      },
+      "orgId": {
+        "type": "string",
+        "default": "openclaw",
+        "description": "Organization ID for memory scoping."
+      },
+      "agentId": {
+        "type": "string",
+        "description": "Agent ID for memory scoping. Defaults to the OpenClaw agent ID."
+      },
+      "autoRetain": {
+        "type": "boolean",
+        "default": true,
+        "description": "Automatically store conversation turns as memories."
+      },
+      "autoRecall": {
+        "type": "boolean",
+        "default": true,
+        "description": "Automatically inject relevant memories into the prompt."
+      },
+      "autoRecallTopK": {
+        "type": "integer",
+        "default": 10,
+        "description": "Maximum number of memories to inject per prompt."
+      },
+      "debug": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable debug logging."
+      }
+    }
+  },
+  "uiHints": {
+    "databaseUrl": {
+      "label": "Database URL",
+      "placeholder": "postgresql://user:pass@localhost:5432/db (leave empty for auto)",
+      "help": "Leave empty to auto-start an embedded PostgreSQL. No Docker needed."
+    },
+    "apiUrl": {
+      "label": "API URL",
+      "placeholder": "http://127.0.0.1:9077 (leave empty for auto)",
+      "help": "Point to an existing Unforget server, or leave empty to auto-manage."
+    },
+    "orgId": {
+      "label": "Organization ID",
+      "placeholder": "openclaw"
+    },
+    "agentId": {
+      "label": "Agent ID",
+      "placeholder": "auto (uses OpenClaw agent ID)"
+    },
+    "autoRetain": {
+      "label": "Auto-Retain",
+      "help": "Automatically store important conversation turns as memories."
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories into each prompt."
+    },
+    "autoRecallTopK": {
+      "label": "Recall Top K",
+      "help": "Number of memories to retrieve per prompt."
+    },
+    "debug": {
+      "label": "Debug Mode"
+    }
+  }
+}
