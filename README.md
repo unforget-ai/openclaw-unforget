@@ -5,7 +5,7 @@ Long-term memory for your OpenClaw agents. Zero LLM on write. Zero config.
 ## Install
 
 ```bash
-npm install @unforget-ai/openclaw
+openclaw plugins install @unforget-ai/openclaw
 ```
 
 ## Setup
