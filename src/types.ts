@@ -7,7 +7,7 @@ export interface OpenClawPluginApi {
   logger: Logger;
   resolvePath(path: string): string;
   registerCli(cli: unknown): void;
-  on(event: string, handler: (event: HookEvent, ctx: HookContext) => Promise<void> | void): void;
+  on(event: string, handler: (event: HookEvent, ctx: HookContext) => Promise<unknown> | unknown): void;
   registerHook(hook: string, handler: (event: HookEvent) => Promise<void> | void): void;
 }
 

@@ -58,17 +58,19 @@ function isNoise(content: string): boolean {
 }
 
 function cleanContent(text: string): string {
+  // Strip injected memory context
+  let cleaned = text.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g, "");
   // Strip OpenClaw metadata prefix from user messages
-  const metaMatch = text.match(/^Sender \(untrusted metadata\):[\s\S]*?```\s*\n([\s\S]*)$/);
+  const metaMatch = cleaned.match(/^Sender \(untrusted metadata\):[\s\S]*?```\s*\n([\s\S]*)$/);
   if (metaMatch) {
     return metaMatch[1].trim();
   }
   // Strip JSON metadata blocks at the start
-  const jsonBlockMatch = text.match(/^```json[\s\S]*?```\s*\n([\s\S]*)$/);
+  const jsonBlockMatch = cleaned.match(/^```json[\s\S]*?```\s*\n([\s\S]*)$/);
   if (jsonBlockMatch) {
     return jsonBlockMatch[1].trim();
   }
-  return text;
+  return cleaned.trim();
 }
 
 function extractText(content: unknown): string {
@@ -159,15 +161,17 @@ export default function init(api: OpenClawPluginApi): void {
     logger.info("[Unforget] Plugin loaded with config:", JSON.stringify(config));
   }
 
-  // ── Auto-Recall: inject memories before each prompt ──
-  api.on("before_prompt_build", async (event: HookEvent, ctx: HookContext) => {
+  // ── Auto-Recall: inject memories via before_agent_start ──
+  // Must return { prependContext: "..." } — OpenClaw prepends this to the system context.
+  api.on("before_agent_start", async (event: HookEvent, ctx: HookContext) => {
     if (!config.autoRecall) return;
 
     try {
       await ensureReady();
       if (!client) return;
 
-      const userMessage = extractLastUserMessage(event);
+      const prompt = typeof event.prompt === "string" ? event.prompt : "";
+      const userMessage = cleanContent(prompt) || extractLastUserMessage(event);
       if (!userMessage || userMessage.length < MIN_RECALL_LENGTH) return;
 
       const agentId = getAgentId(ctx);
@@ -179,22 +183,21 @@ export default function init(api: OpenClawPluginApi): void {
       );
 
       if (result.memory_count > 0) {
-        // Inject memories into the prompt context
         const memoryBlock = [
           "<relevant-memories>",
+          "Facts and context from previous conversations with this user. Use these to answer questions.",
+          "",
           result.context,
           "</relevant-memories>",
         ].join("\n");
 
-        if (event.prompt && typeof event.prompt === "string") {
-          event.prompt = memoryBlock + "\n\n" + event.prompt;
-        }
-
         if (config.debug) {
           logger.info(
-            `[Unforget] Injected ${result.memory_count} memories for: "${userMessage.slice(0, 50)}..."`
+            `[Unforget] Returning prependContext (${result.memory_count} memories) for: "${userMessage.slice(0, 50)}..."`
           );
         }
+
+        return { prependContext: memoryBlock };
       }
     } catch (err) {
       logger.warn("[Unforget] Auto-recall failed:", err);
