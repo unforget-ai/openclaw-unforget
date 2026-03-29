@@ -28,13 +28,13 @@ That's it. No API keys. No Docker. No database setup.
 Just chat normally. The plugin handles everything:
 
 ```
-You: My name is Kobi and I like sushi
-Agent: Got it — I'll remember that, Kobi.
+You: My name is Alex and I like sushi
+Agent: Got it — I'll remember that, Alex.
 
 /new (new session)
 
 You: What's my name and what food do I like?
-Agent: Your name is Kobi and you like sushi.
+Agent: Your name is Alex and you like sushi.
 
 You: Forget that I like sushi
 Agent: Forgotten.
