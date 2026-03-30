@@ -11,7 +11,7 @@ openclaw plugins install @unforget-ai/openclaw
 Requires Python 3.12 with `unforget-embed`:
 
 ```bash
-pipx install unforget-embed --python python3.12
+pipx install unforget-embed
 ```
 
 That's it. No API keys. No Docker. No database setup.
